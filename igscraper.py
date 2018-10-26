@@ -8,12 +8,15 @@
 # import some libraries
 from __future__ import print_function
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
 from datetime import datetime
+import time
+import json
 import urllib2
 import urlparse
 import argparse
 import subprocess
-import json
 import sys
 import os
 import re
@@ -44,6 +47,24 @@ def notify(message):
     return
 
 
+# set up argparser
+parser = argparse.ArgumentParser(description="""
+                                 A standalone mass downloader for public
+                                 Instagram profiles.\n
+                                 Will find all image sources and save 
+                                 the images to disk.
+                                 """)
+parser.add_argument("-u", "--user",
+                    help="start a direct download from a provided \
+                    username",
+                    nargs=1, metavar="(USER)")
+parser.add_argument("-d", "--delay",
+                    help="set a custom delay for downloads in seconds. \
+                    This helps to not get banned by IG. Default is 1.5", 
+                    nargs=1, type=int, metavar="(SECONDS)")
+args = parser.parse_args()
+
+
 # set up Jason Parser's K9
 # stolded from https://gist.github.com/douglasmiranda/5127251
 def k9(key, dictionary):
@@ -59,29 +80,11 @@ def k9(key, dictionary):
                     yield result
 
 
-# set up argparser
-parser = argparse.ArgumentParser(description="""
-                                 A standalone mass downloader for public
-                                 Instagram profiles.\n
-                                 Will find all image sources and save 
-                                 the images to disk.
-                                 """)
-parser.add_argument("-u", "--user",
-                    help="start a direct download from a provided \
-                    username",
-                    nargs=1, metavar="(USER)")
-parser.add_argument("-d", "--delay",
-                    help="set a custom delay for downloads in seconds,\
-                    default is 3. this helps to not get banned by IG.", 
-                    nargs=1, type=int, metavar="(SECONDS)")
-args = parser.parse_args()
-
-
 # set up default delay
 if args.delay:
     wait = args.delay[0]
 else:
-    wait = 3
+    wait = 1.5
 
 
 # clear screen and set terminal title
@@ -101,7 +104,7 @@ print("""\033[32m
  _| || |__| | \__ \ (__| | | (_| | |_) |  __/ |   
 |_____\_____| |___/\___|_|  \__,_| .__/ \___|_|   
                                  | |              
-Codename T.H.O.T.                |_|          \033[31mv0.1
+Codename T.H.O.T.P.A.T.R.O.L.    |_|          \033[31mv0.1
 \033[0m
 """)
 
@@ -114,13 +117,12 @@ ua = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) '
 
 # get thot from args or user
 if args.user:
-    thot = args.user[0]
+    thot = args.user[0].strip('@').rstrip('/')
     print("Scraping from: \n" + fg.GREEN + "> " + style.RESET_ALL 
         + thot)
 else:
     thot = raw_input("Input username to scrape: \n" + fg.GREEN +
-                    "> " + style.RESET_ALL)
-
+                    "> " + style.RESET_ALL).strip('@').rstrip('/')
 
 # start counting time
 start = datetime.now()
@@ -133,30 +135,50 @@ print(fg.GREEN + "Connecting..." + style.RESET_ALL, end="\r")
 sys.stdout.flush()
 
 
-# make some soup, find content, terminate on 404
-# TODO: IG uses lazyload, igscraper only picks up first 12 items
+# scroll down to bottom of page
+# to load the complete content
+driver = webdriver.PhantomJS()
+driver.get(url)
+lastHeight = driver.execute_script("return document.body.scrollHeight")
+
+print(fg.GREEN + "Scrolling page..." + style.RESET_ALL, end="\r")
+sys.stdout.flush()
+
+while True:
+    driver.execute_script("window.scrollTo(0, \
+        document.body.scrollHeight);")
+    time.sleep(wait)
+    newHeight = driver.execute_script("return \
+        document.body.scrollHeight")
+    if newHeight == lastHeight:
+        break
+    lastHeight = newHeight
+
+completeContent = driver.page_source
+
+
+# make some soup, terminate on 404
 try:
-    req = urllib2.Request(url, headers=ua)
-    soup = BeautifulSoup(urllib2.urlopen(req), "lxml")
-    content = soup.findAll('script', type="text/javascript",
-        text=re.compile('window._sharedData'))
+    soup = BeautifulSoup(completeContent, "html5lib")
 except urllib2.URLError:
     print(fg.RED + "Host unreachable, stopping...")
     sys.exit()
 
 
-# call Jason Parser
-jsonContent = content[0].get_text().replace('window._sharedData = ',
-    '')[:-1]
-jasonParser = json.loads(jsonContent)
-thotList = list(k9('src', jasonParser))
+# collect offending thots
+print(style.CLINE + fg.GREEN + "Generating thot list...", end="\r")
+sys.stdout.flush()
+
+thotList = []
+
+for thotLink in soup.select('div.kIKUG > a'):
+    thotList.append(url + thotLink['href'])
 
 
 # set up path names and other variables for downloads
 home = os.path.expanduser("~")
 fpath = os.path.join(home, "igscraper", thot)
 i = e = s = 0
-
 
 
 # create directory if necessary
@@ -167,9 +189,27 @@ if not os.path.exists(fpath):
 
 
 # start thot patrol
-thotPatrol = [n for n in thotList if "s640x640" in n]
+print(style.CLINE + fg.GREEN + "Grabbing fullsize thotpics...", 
+    end="\r")
+sys.stdout.flush()
 
-for img in thotPatrol:
+thotGallery = []
+
+for link in thotList:
+    time.sleep(wait)
+    thotReq = urllib2.urlopen(link).read()
+    thotSoup = BeautifulSoup(thotReq, "html5lib")
+    content = thotSoup.findAll('script', type="text/javascript", 
+        text=re.compile('window._sharedData'))
+    # call Jason Parser
+    jsonContent = content[0].get_text().replace('window._sharedData = ',
+    '')[:-1]
+    jasonParser = json.loads(jsonContent)
+    thotImage = list(k9('display_url', jasonParser))
+    thotGallery.append(thotImage)
+
+for img in thotGallery:
+    img = str(img).lstrip('[u\'').rstrip('\']')
     file_name = img.split('/')[-1]
     full_path = os.path.join(fpath, file_name)
     if not os.path.exists(full_path):
@@ -178,7 +218,7 @@ for img in thotPatrol:
             i += 1
             print(style.CLINE + fg.GREEN +
                   "Grabbing file... [" + str(i) + "/" +
-                  str(len(thotPatrol) - s) + "]", end="\r")
+                  str(len(thotGallery) - s) + "]", end="\r")
             with open(full_path, 'wb') as f:
                 f.write(filedata.read())
             sys.stdout.flush()
@@ -205,6 +245,7 @@ sys.stdout.flush()
 # check passed time and convert to readable string
 finish = datetime.now() - start
 finish = str(finish.total_seconds())
+
 
 # print success messages as notification window and in terminal
 notify("Downloaded " + str(i - e) + " new files from " + thot +
