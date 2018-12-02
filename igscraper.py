@@ -5,6 +5,9 @@
 # igscraper is a standalone tool to mass download public Instagram
 # accounts and save them to your disk for further """research"""
 
+# Known issue: performance is really slow since IG will ban connections
+# that look like they are mass-downloading
+
 # import some libraries
 from __future__ import print_function
 from bs4 import BeautifulSoup
@@ -21,6 +24,15 @@ import sys
 import os
 import re
 
+
+# define IG specific variables for ease of adapting to changes
+thotContainer = "kIKUG"
+
+
+# define other variables for later use
+thotList = []
+thotGallery = []
+
 # set classes for colors
 class fg:
     BLACK = '\033[30m'
@@ -32,7 +44,6 @@ class fg:
 
 class bg:
     GREEN = '\033[42m'
-
 
 class style:
     BLINK = '\33[5m'
@@ -124,6 +135,7 @@ else:
     thot = raw_input("Input username to scrape: \n" + fg.GREEN +
                     "> " + style.RESET_ALL).strip('@').rstrip('/')
 
+
 # start counting time
 start = datetime.now()
 
@@ -141,38 +153,49 @@ driver = webdriver.PhantomJS()
 driver.get(url)
 lastHeight = driver.execute_script("return document.body.scrollHeight")
 
-print(fg.GREEN + "Scrolling page..." + style.RESET_ALL, end="\r")
+print(fg.GREEN + "Fetching thots..." + style.RESET_ALL, end="\r")
 sys.stdout.flush()
 
+
+# get temporary page source and make soup with it, terminate on 404
 while True:
+    tempContent = driver.page_source
+    try:
+        soup = BeautifulSoup(tempContent, "html5lib")
+    except urllib2.URLError:
+        print(fg.RED + "Host unreachable, stopping...")
+        sys.exit()
+    # grab all links to single posts and append them to list
+    for thotLink in soup.select('div.' + thotContainer + ' > a'):
+        thotLocation = url + thotLink['href']
+        if not thotLocation in thotList:
+            thotList.append(thotLocation) 
     driver.execute_script("window.scrollTo(0, \
         document.body.scrollHeight);")
     time.sleep(wait)
-    newHeight = driver.execute_script("return \
+    newHeight= driver.execute_script("return \
         document.body.scrollHeight")
     if newHeight == lastHeight:
         break
     lastHeight = newHeight
 
-completeContent = driver.page_source
+#completeContent = driver.page_source
 
 
 # make some soup, terminate on 404
-try:
-    soup = BeautifulSoup(completeContent, "html5lib")
-except urllib2.URLError:
-    print(fg.RED + "Host unreachable, stopping...")
-    sys.exit()
+#try:
+#    soup = BeautifulSoup(completeContent, "html5lib")
+#except urllib2.URLError:
+#    print(fg.RED + "Host unreachable, stopping...")
+#    sys.exit()
 
 
 # collect offending thots
-print(style.CLINE + fg.GREEN + "Generating thot list...", end="\r")
-sys.stdout.flush()
+#print(style.CLINE + fg.GREEN + "Generating thot list...", end="\r")
+#sys.stdout.flush()
 
-thotList = []
-
-for thotLink in soup.select('div.kIKUG > a'):
-    thotList.append(url + thotLink['href'])
+#for thotLink in soup.select('div.'+ thotContainer +' > a'):
+#    thotList.append(url + thotLink['href'])
 
 
 # set up path names and other variables for downloads
@@ -189,14 +212,17 @@ if not os.path.exists(fpath):
 
 
 # start thot patrol
-print(style.CLINE + fg.GREEN + "Grabbing fullsize thotpics...", 
-    end="\r")
+print(style.CLINE + fg.GREEN + "Unscrambling list... \
+    (This might take a while)", end="\r")
 sys.stdout.flush()
 
-thotGallery = []
 
+# the sanitizing of links takes an absurd amount of time
 for link in thotList:
     time.sleep(wait)
+    # this little bitch right here creates possibly hundreds of 
+    # connection requests so ig will terminate the connection at some
+    # point in time, needs a workaround
     thotReq = urllib2.urlopen(link).read()
     thotSoup = BeautifulSoup(thotReq, "html5lib")
     content = thotSoup.findAll('script', type="text/javascript", 
